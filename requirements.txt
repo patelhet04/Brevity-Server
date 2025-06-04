@@ -3,3 +3,10 @@ fastapi[standard]
 httpx
 dotenv
 uvicorn
+langchain_community
+tqdm
+tranformers
+langchain_huggingface
+aiofiles
+newspaper3k
+lxml[html_clean]
