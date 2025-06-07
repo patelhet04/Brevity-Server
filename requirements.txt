@@ -5,8 +5,12 @@ dotenv
 uvicorn
 langchain_community
 tqdm
-tranformers
+transformers
 langchain_huggingface
 aiofiles
 newspaper3k
 lxml[html_clean]
+boto3
+python-dotenv
+pydantic
+pydantic-settings
