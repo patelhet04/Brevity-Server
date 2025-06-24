@@ -1,3 +1,4 @@
+from app.config import settings
 from fastapi import FastAPI, HTTPException
 import httpx
 from datetime import datetime, timedelta
@@ -12,11 +13,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
+# Import settings for configuration
+
 NEWS_SOURCES = {}
-# Get API key from environment variables
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+# Get API key from settings
+NEWS_API_KEY = settings.news_api_key
 
 if not NEWS_API_KEY:
     raise ValueError("NEWS API not set")

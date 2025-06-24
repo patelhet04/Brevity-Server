@@ -74,6 +74,28 @@ class Settings(BaseSettings):
     cors_allow_headers: List[str] = ["*"]
 
     # ================================
+    # REDIS SETTINGS
+    # ================================
+    redis_url: str = "redis://localhost:6379"
+    session_ttl: int = 30 * 60  # 30 minutes in seconds
+
+    # ================================
+    # RAG SYSTEM SETTINGS
+    # ================================
+    tavily_api_key: Optional[str] = None
+    tavily_api_base_url: str = "https://api.tavily.com/search"
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "gemma3:4b"
+    ollama_max_tokens: int = 500
+    ollama_temperature: float = 0.3
+    ollama_request_timeout: float = 60.0
+    workflow_timeout: float = 60.0
+    vector_similarity_threshold: float = 0.6
+    chroma_db_path: str = "./chroma_db"
+    embeddings_cache_path: str = "./embeddings_cache"
+    embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
+
+    # ================================
     # LOGGING SETTINGS
     # ================================
     log_level: str = "INFO"
@@ -123,6 +145,23 @@ class Settings(BaseSettings):
             "min_length": self.summarizer_min_length,
             "content_min_chars": self.summarizer_content_min_chars,
             "max_chars": self.summarizer_max_chars
+        }
+
+    def get_rag_config(self) -> dict:
+        """Get RAG system configuration dictionary"""
+        return {
+            "tavily_api_key": self.tavily_api_key,
+            "tavily_api_base_url": self.tavily_api_base_url,
+            "ollama_host": self.ollama_host,
+            "ollama_model": self.ollama_model,
+            "ollama_max_tokens": self.ollama_max_tokens,
+            "ollama_temperature": self.ollama_temperature,
+            "ollama_request_timeout": self.ollama_request_timeout,
+            "workflow_timeout": self.workflow_timeout,
+            "vector_similarity_threshold": self.vector_similarity_threshold,
+            "chroma_db_path": self.chroma_db_path,
+            "embeddings_cache_path": self.embeddings_cache_path,
+            "embedding_model": self.embedding_model
         }
 
 

@@ -1,45 +1,23 @@
 import boto3
-import os
 from botocore.exceptions import ClientError, NoCredentialsError
-from dotenv import load_dotenv
+from app.config import settings
 import logging
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Validate required environment variables
-REQUIRED_ENV_VARS = [
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-    'AWS_DEFAULT_REGION',
-    'DYNAMODB_TABLE_NAME'
-]
-
-
-def validate_environment():
-    missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-    if missing_vars:
-        raise ValueError(
-            f"Missing required environment variables: {missing_vars}")
-
-
-validate_environment()
-
-# DynamoDB configuration
-AWS_REGION = os.getenv('AWS_DEFAULT_REGION')
-TABLE_NAME = os.getenv('DYNAMODB_TABLE_NAME')
+# DynamoDB configuration from settings
+AWS_REGION = settings.aws_default_region
+TABLE_NAME = settings.dynamodb_table_name
 
 # Create DynamoDB resource
 try:
     dynamodb = boto3.resource(
         'dynamodb',
         region_name=AWS_REGION,
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key
     )
     logger.info(f"DynamoDB resource created for region: {AWS_REGION}")
 except NoCredentialsError:

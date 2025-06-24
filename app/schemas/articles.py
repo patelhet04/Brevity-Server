@@ -221,6 +221,28 @@ class SuccessResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(...,
+                      description="Role of the message sender (e.g., 'user' or 'assistant')")
+    content: str = Field(..., description="Content of the message")
+
+
+class ChatTurnRequest(BaseModel):
+    query: str = Field(..., description="The current user's message/query")
+    history: List[ChatMessage] = Field(
+        [], description="Previous messages in the conversation")
+    conversation_id: Optional[str] = Field(
+        None, description="Unique ID for the conversation thread")
+
+
+class ChatTurnResponse(BaseModel):
+    response: str = Field(..., description="The chatbot's generated response")
+    conversation_id: str = Field(...,
+                                 description="Unique ID for the conversation thread")
+    history: List[ChatMessage] = Field(...,
+                                       description="Updated conversation history")
+
+
 __all__ = [
     # Base schemas
     'ArticleBase',

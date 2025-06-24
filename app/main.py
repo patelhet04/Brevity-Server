@@ -9,9 +9,13 @@ from datetime import datetime
 from app.config import settings, validate_settings
 from app.api.routes import router as articles_router
 from app.db.database import health_check
-from app.schemas.articles import ErrorResponse
-from utils.news_fetcher import initialize_sources
 from datetime import datetime, timezone
+from app.services.redis_service import redis_store
+from utils.news_fetcher import initialize_sources
+
+# RAG System imports
+from app.rag.agent_orchestrator import AgenticRAGSystem
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -19,6 +23,19 @@ logging.basicConfig(
     filename=settings.log_file if settings.log_file else None
 )
 logger = logging.getLogger(__name__)
+
+# Global RAG system instance
+rag_system: AgenticRAGSystem = None
+
+
+def get_rag_system() -> AgenticRAGSystem:
+    """Get the global RAG system instance"""
+    if rag_system is None or not rag_system.initialized:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG system is not initialized or unavailable"
+        )
+    return rag_system
 
 # ================================
 # APPLICATION LIFECYCLE
@@ -28,6 +45,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events"""
+    global rag_system
 
     # ================================
     # STARTUP
@@ -40,15 +58,28 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Environment configuration validated")
 
         # Initialize news sources
-        await initialize_sources()  # Add this line
+        await initialize_sources()
         logger.info("✅ News sources initialized")
 
         # Check database connectivity
         if health_check():
-            logger.info("✅ DynamoDB connection successful")
+            logger.info("✅ DynamoDB connection established")
         else:
             logger.error("❌ DynamoDB connection failed")
             raise Exception("Database health check failed")
+
+        # Initialize RAG system
+        logger.info("🤖 Initializing RAG system...")
+        rag_system = AgenticRAGSystem()
+
+        # Initialize RAG components (this may take a while)
+        rag_initialized = await rag_system.initialize()
+        if rag_initialized:
+            logger.info("✅ RAG system initialized successfully")
+        else:
+            logger.warning(
+                "⚠️ RAG system initialization failed - continuing without RAG")
+            rag_system = None
 
         logger.info("🚀 Application startup complete")
 
@@ -71,9 +102,9 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="""
-    **Brevity** - AI-Powered News Summarization API
+    **Brevity** - AI-Powered News Summarization & RAG API
     
-    This API provides two main functionalities:
+    This API provides three main functionalities:
     
     1. **Process and Store** (`POST /api/v1/articles/process-and-store`)
        - Fetches latest news articles from NewsAPI
@@ -87,17 +118,26 @@ app = FastAPI(
        - Pagination support for large datasets
        - Efficient querying using DynamoDB GSI indexes
     
+    3. **RAG Chat System** (`POST /api/v1/articles/chat`)
+       - Ask natural language questions about news
+       - Intelligent search across stored articles and web
+       - AI-generated responses with source citations
+       - Combines vector search with real-time web search
+    
     ## Features
     - 🤖 AI-powered summarization using DistilBART
+    - 🧠 Advanced RAG system with vector search
+    - 🌐 Real-time web search fallback via Tavily
     - 🗃️ Efficient storage with DynamoDB
     - 🔍 Advanced filtering and pagination
     - 📊 RESTful API design
     - 🚀 High-performance async processing
     
     ## Getting Started
-    1. Configure your environment variables
+    1. Configure your environment variables (including Tavily API key for RAG)
     2. Call the process endpoint to fetch and store articles
     3. Use the retrieve endpoint to access summarized content
+    4. Query the RAG system with natural language questions
     """,
     docs_url=settings.docs_url,
     redoc_url=settings.redoc_url,
@@ -220,6 +260,7 @@ app.include_router(
     tags=["articles"]
 )
 
+
 # ================================
 # ROOT ENDPOINTS
 # ================================
@@ -229,34 +270,49 @@ app.include_router(
 async def root():
     """API root endpoint with basic information"""
     return {
-        "message": f"Welcome to {settings.app_name}",
+        "message": f"Welcome to {settings.app_name        }",
         "version": settings.app_version,
         "environment": settings.environment,
         "docs_url": settings.docs_url,
         "endpoints": {
             "process_articles": f"{settings.api_v1_prefix}/articles/process-and-store",
             "get_articles": f"{settings.api_v1_prefix}/articles/",
-            "health": "/health"
+            "chat": f"{settings.api_v1_prefix}/articles/chat",
+            "health": "/health",
         }
     }
 
 
 @app.get("/health", tags=["health"])
-@app.get("/health", tags=["health"])
 async def health():
-    """Health check endpoint"""
+    """Health check endpoint with RAG system status"""
     try:
         db_healthy = health_check()
+        rag_healthy = rag_system is not None and rag_system.initialized
+
+        # Overall health depends on database (critical) and optionally RAG
+        overall_healthy = db_healthy
 
         health_status = {
-            "status": "healthy" if db_healthy else "unhealthy",
+            "status": "healthy" if overall_healthy else "unhealthy",
             "version": settings.app_version,
             "environment": settings.environment,
-            "database": "connected" if db_healthy else "disconnected",
+            "components": {
+                "database": "connected" if db_healthy else "disconnected",
+                "rag_system": "initialized" if rag_healthy else "not_initialized",
+            },
             "timestamp": datetime.now(timezone.utc).timestamp()
         }
 
-        status_code = 200 if db_healthy else 503
+        # Include RAG system stats if available
+        if rag_system:
+            try:
+                rag_stats = rag_system.get_system_stats()
+                health_status["rag_stats"] = rag_stats
+            except Exception as e:
+                logger.warning(f"Failed to get RAG stats: {e}")
+
+        status_code = 200 if overall_healthy else 503
         return JSONResponse(content=health_status, status_code=status_code)
 
     except Exception as e:
@@ -269,6 +325,7 @@ async def health():
             },
             status_code=503
         )
+
 # ================================
 # DEVELOPMENT SERVER
 # ================================

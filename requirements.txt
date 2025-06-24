@@ -14,3 +14,16 @@ boto3
 python-dotenv
 pydantic
 pydantic-settings
+chromadb
+sentence-transformers>=2.6.1
+huggingface-hub>=0.20.0
+torch
+ollama
+redis
+llama-index
+llama-index-core
+llama-index-vector-stores-chroma
+llama-index-embeddings-huggingface
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+einops

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from app.db import article_crud
 import logging
@@ -12,12 +12,11 @@ from app.services.article_service import (
 )
 from app.schemas.articles import (
     ArticleListResponse,
-    ArticleQueryParams,
-    DateQueryParams,
-    SourceQueryParams,
-    ErrorResponse,
     SuccessResponse
 )
+from pydantic import BaseModel
+from typing import Optional
+
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +127,95 @@ async def get_articles(
         )
 
 # ================================
+# API 3: RAG CHAT SYSTEM
+# ================================
+
+
+class ChatRequest(BaseModel):
+    """Request model for chat endpoint"""
+    query: str
+
+
+class SourceInfo(BaseModel):
+    """Source information model"""
+    title: str
+    source: str
+    url: str
+
+
+class ChatResponse(BaseModel):
+    """Response model for chat endpoint"""
+    success: bool
+    query: str
+    content: str
+    sources: List[SourceInfo]
+    metadata: Dict[str, Any]
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_with_rag(request: ChatRequest):
+    """
+    API 3: Chat with the RAG system about news
+
+    Ask natural language questions about news and get AI-generated responses
+    with source citations. The system will:
+    1. Search existing articles in the database using vector similarity
+    2. If not enough relevant articles found, search the web via Tavily
+    3. Generate a comprehensive response using Ollama LLM
+    4. Provide source citations for all information
+
+    Example queries:
+    - "What's the latest news about AI?"
+    - "Tell me about recent developments in climate change"
+    - "What happened in the stock market today?"
+
+    Note: Timeout is configured at system level (default: 60 seconds)
+    """
+    try:
+        if not request.query.strip():
+            raise HTTPException(
+                status_code=400, detail="Query cannot be empty")
+
+        # Import here to avoid circular import
+        from app.main import get_rag_system
+
+        # Get RAG system
+        rag = get_rag_system()
+
+        # Process the query
+        result = await rag.process_query(request.query.strip())
+
+        # Handle error cases
+        if "error" in result:
+            raise HTTPException(
+                status_code=500, detail=result.get("error", "Unknown error"))
+
+        # Convert sources to SourceInfo objects
+        sources = [
+            SourceInfo(
+                title=source.get("title", ""),
+                source=source.get("source", ""),
+                url=source.get("url", "")
+            )
+            for source in result.get("sources", [])
+        ]
+
+        return ChatResponse(
+            success=True,
+            query=request.query.strip(),
+            content=result.get("content", ""),
+            sources=sources,
+            metadata=result.get("metadata", {})
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"RAG chat failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Chat system error: {str(e)}")
+
+# ================================
 # SPECIFIC ENDPOINT ALTERNATIVES
 # ================================
 
@@ -202,8 +290,8 @@ async def health_check():
     return {"status": "healthy", "service": "articles_api"}
 
 # ================================
-# EXPORT ROUTER
+# EXPORT ROUTERS
 # ================================
 
-# This router will be included in main.py
+# Export router to be included in main.py
 __all__ = ['router']
