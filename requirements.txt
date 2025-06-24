@@ -20,10 +20,9 @@ huggingface-hub>=0.20.0
 torch
 ollama
 redis
-llama-index
 llama-index-core
 llama-index-vector-stores-chroma
 llama-index-embeddings-huggingface
+tavily-python
+llama-index-tools-tavily-research
 llama-index-llms-ollama
-llama-index-embeddings-huggingface
-einops
