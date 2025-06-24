@@ -74,6 +74,23 @@ class Settings(BaseSettings):
     cors_allow_headers: List[str] = ["*"]
 
     # ================================
+    # RAG SYSTEM SETTINGS
+    # ================================
+    ollama_host: str = "http://localhost:11434"
+
+    #======================
+    # Web Searcher Settings
+    #======================
+    tavily_api_key: str
+    # ======================
+
+    #======================
+    # OpenAI Settings
+    #======================
+    openai_key: str
+    # ======================
+
+    # ================================
     # LOGGING SETTINGS
     # ================================
     log_level: str = "INFO"
@@ -136,7 +153,9 @@ def validate_settings():
         "news_api_key",
         "aws_access_key_id",
         "aws_secret_access_key",
-        "dynamodb_table_name"
+        "dynamodb_table_name",
+        "tavily_api_key",
+        "openai_key"
     ]
 
     missing_fields = []

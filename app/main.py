@@ -5,13 +5,17 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from app.config import settings, validate_settings
 from app.api.routes import router as articles_router
 from app.db.database import health_check
-from app.schemas.articles import ErrorResponse
+from app.schemas.articles import (
+    ChatRequest, ChatResponse
+)
 from utils.news_fetcher import initialize_sources
-from datetime import datetime, timezone
+from app.rag.rag_manager import rag_manager
+
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -19,6 +23,7 @@ logging.basicConfig(
     filename=settings.log_file if settings.log_file else None
 )
 logger = logging.getLogger(__name__)
+
 
 # ================================
 # APPLICATION LIFECYCLE
@@ -49,6 +54,9 @@ async def lifespan(app: FastAPI):
         else:
             logger.error("❌ DynamoDB connection failed")
             raise Exception("Database health check failed")
+
+        rag_manager.initialize()
+        logger.info("✅ RAG system initialized")
 
         logger.info("🚀 Application startup complete")
 
@@ -269,6 +277,8 @@ async def health():
             },
             status_code=503
         )
+
+
 # ================================
 # DEVELOPMENT SERVER
 # ================================

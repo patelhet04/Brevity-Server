@@ -16,7 +16,9 @@ from app.schemas.articles import (
     DateQueryParams,
     SourceQueryParams,
     ErrorResponse,
-    SuccessResponse
+    SuccessResponse,
+    ChatRequest,
+    ChatResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -189,6 +191,44 @@ async def get_articles_by_source_endpoint(
     except Exception as e:
         logger.error(f"Error in get_articles_by_source_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse, tags=["Chatbot"])
+async def chat_with_bot(request: ChatRequest):
+    """
+    Endpoint to interact with the RAG chatbot in a conversational manner.
+
+    - **query**: The current user's message/query.
+    - **history**: A list of previous messages in the conversation (role and content).
+    - **conversation_id**: Optional. A unique ID for the conversation thread. If not provided, a new one will be generated.
+
+    Returns the chatbot's response, the conversation_id, and the updated history.
+    """
+    try:
+        from app.rag.rag_manager import rag_manager
+        
+        # Get the orchestrator instance
+        orchestrator = rag_manager.get_orchestrator()
+        
+        # Process the chat request
+        logger.info(f"Processing chat request for conversation: {getattr(request, 'conversation_id', 'new')}")
+        result = await orchestrator.run(chat_request=request)
+        
+        logger.info("Chat request processed successfully")
+        return result
+        
+    except RuntimeError as e:
+        logger.error(f"RAG system error: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail="RAG system not initialized. Please contact support."
+        )
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while processing your request. Please try again."
+        )
 
 
 # ================================
