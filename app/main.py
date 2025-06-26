@@ -16,9 +16,7 @@ from datetime import datetime, timezone
 from app.services.redis_service import redis_store
 from utils.news_fetcher import initialize_sources
 from app.rag.rag_manager import rag_manager
-
-
-
+from mangum import Mangum
 
 # Configure logging
 logging.basicConfig(
@@ -256,21 +254,80 @@ async def root():
 
 @app.get("/health", tags=["health"])
 async def health():
-    """Health check endpoint"""
+    """Health check endpoint - checks database, Redis, and RAG system"""
     try:
+        # Check DynamoDB connectivity
         db_healthy = health_check()
 
+        # Check Redis connectivity
+        redis_healthy = False
+        redis_error = None
+        try:
+            redis_store.redis.ping()
+            redis_healthy = True
+        except Exception as e:
+            redis_error = str(e)
+            logger.warning(f"Redis health check failed: {e}")
+
+        # Check RAG system
+        rag_healthy = False
+        rag_error = None
+        try:
+            # Simple check to see if RAG manager is initialized
+            from app.rag.rag_manager import rag_manager
+            orchestrator = rag_manager.get_orchestrator()
+            rag_healthy = orchestrator is not None
+        except Exception as e:
+            rag_error = str(e)
+            logger.warning(f"RAG health check failed: {e}")
+
+        # Determine overall system health
+        all_healthy = db_healthy and redis_healthy and rag_healthy
+
         health_status = {
-            "status": "healthy" if db_healthy else "unhealthy",
+            "status": "healthy" if all_healthy else "degraded",
             "version": settings.app_version,
             "environment": settings.environment,
             "components": {
                 "database": "connected" if db_healthy else "disconnected",
+                "redis": "connected" if redis_healthy else "disconnected",
+                "rag_system": "initialized" if rag_healthy else "not_initialized"
             },
             "timestamp": datetime.now(timezone.utc).timestamp()
         }
 
-        status_code = 200 if db_healthy else 503
+        # Add error details if any component is unhealthy
+        if not all_healthy:
+            health_status["errors"] = {}
+            if not db_healthy:
+                health_status["errors"]["database"] = "Connection failed"
+            if not redis_healthy:
+                health_status["errors"]["redis"] = redis_error or "Connection failed"
+            if not rag_healthy:
+                health_status["errors"]["rag_system"] = rag_error or "Not initialized"
+
+        # Add Redis-specific info if healthy
+        if redis_healthy:
+            try:
+                # Get Redis info (optional additional details)
+                redis_info = redis_store.redis.info('server')
+                health_status["redis_info"] = {
+                    "version": redis_info.get('redis_version'),
+                    "uptime_seconds": redis_info.get('uptime_in_seconds'),
+                    "connected_clients": redis_store.redis.info('clients').get('connected_clients', 0)
+                }
+            except Exception:
+                # Don't fail health check if we can't get Redis info
+                pass
+
+        # Return appropriate status code
+        if all_healthy:
+            status_code = 200
+        elif db_healthy:  # Core system (DB) works, others degraded
+            status_code = 200  # Still functional
+        else:
+            status_code = 503  # Core system down
+
         return JSONResponse(content=health_status, status_code=status_code)
 
     except Exception as e:
@@ -285,6 +342,7 @@ async def health():
         )
 
 
+handler = Mangum(app)
 
 # ================================
 # DEVELOPMENT SERVER

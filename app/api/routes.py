@@ -22,6 +22,7 @@ from app.schemas.articles import (
 )
 from pydantic import BaseModel
 from typing import Optional
+from app.services.redis_service import redis_store
 
 
 logger = logging.getLogger(__name__)
@@ -206,24 +207,99 @@ async def chat_with_bot(request: ChatRequest):
     - **conversation_id**: Optional. A unique ID for the conversation thread. If not provided, a new one will be generated.
 
     Returns the chatbot's response, the conversation_id, and the updated history.
+
+    **🆕 Redis Integration**: Conversations are now persisted in Redis with 30-minute TTL.
     """
     try:
         from app.rag.rag_manager import rag_manager
-        
+
         # Get the orchestrator instance
         orchestrator = rag_manager.get_orchestrator()
-        
-        # Process the chat request
-        logger.info(f"Processing chat request for conversation: {getattr(request, 'conversation_id', 'new')}")
+
+        # ================================
+        # REDIS CONVERSATION PERSISTENCE
+        # ================================
+
+        # Generate conversation ID if not provided
+        if not request.conversation_id:
+            request.conversation_id = redis_store.generate_conversation_id()
+            logger.info(
+                f"Generated new conversation ID: {request.conversation_id}")
+        else:
+            logger.info(
+                f"Using existing conversation ID: {request.conversation_id}")
+
+        # Load existing conversation history from Redis (if exists)
+        try:
+            stored_history = redis_store.get_conversation(
+                request.conversation_id)
+            if stored_history:
+                # Convert stored history to ChatMessage format for RAG compatibility
+                from app.schemas.articles import ChatMessage
+                request.history = [ChatMessage(
+                    role=msg["role"], content=msg["content"]) for msg in stored_history]
+                logger.info(
+                    f"Loaded {len(stored_history)} messages from Redis for conversation {request.conversation_id}")
+            else:
+                # Keep the history provided in the request (for new conversations or if Redis lookup fails)
+                logger.info(
+                    f"No stored history found for conversation {request.conversation_id}, using request history ({len(request.history)} messages)")
+        except Exception as redis_error:
+            logger.warning(
+                f"Redis lookup failed for conversation {request.conversation_id}: {redis_error}. Continuing with request history.")
+            # Continue with the history provided in the request - graceful degradation
+
+        # ================================
+        # RAG PROCESSING (UNCHANGED)
+        # ================================
+
+        # Process the chat request through RAG system
+        logger.info(
+            f"Processing chat request for conversation: {request.conversation_id}")
         result = await orchestrator.run(chat_request=request)
-        
+
+        # ================================
+        # SAVE UPDATED HISTORY TO REDIS
+        # ================================
+
+        try:
+            # Convert ChatMessage objects back to dict format for Redis storage
+            history_for_storage = [
+                {"role": msg.role, "content": msg.content} for msg in result.history]
+
+            # Prepare conversation metadata
+            metadata = {
+                "last_query": request.query,
+                "message_count": len(result.history),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+
+            # Save conversation to Redis
+            save_success = redis_store.save_conversation(
+                conversation_id=result.conversation_id,
+                history=history_for_storage,
+                metadata=metadata
+            )
+
+            if save_success:
+                logger.info(
+                    f"Successfully saved conversation {result.conversation_id} to Redis ({len(history_for_storage)} messages)")
+            else:
+                logger.warning(
+                    f"Failed to save conversation {result.conversation_id} to Redis")
+
+        except Exception as redis_save_error:
+            logger.error(
+                f"Redis save failed for conversation {result.conversation_id}: {redis_save_error}")
+            # Don't fail the request if Redis save fails - graceful degradation
+
         logger.info("Chat request processed successfully")
         return result
-        
+
     except RuntimeError as e:
         logger.error(f"RAG system error: {str(e)}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail="RAG system not initialized. Please contact support."
         )
     except Exception as e:
