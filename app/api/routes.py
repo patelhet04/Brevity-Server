@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from app.db import article_crud
+from app.db.article_crud import clear_all_articles
 import logging
 
 from app.services.article_service import (
@@ -309,6 +310,52 @@ async def chat_with_bot(request: ChatRequest):
             detail="An error occurred while processing your request. Please try again."
         )
 
+
+# ================================
+# TABLE MANAGEMENT
+# ================================
+
+
+@router.delete("/clear-all", response_model=SuccessResponse, tags=["Admin"])
+async def clear_all_articles_endpoint():
+    """
+    ADMIN ENDPOINT: Clear all articles by deleting and recreating the table
+
+    ⚠️  WARNING: This will delete the entire table and recreate it!
+    Much faster than scanning/deleting items. Perfect for region changes.
+
+    Returns: Success message confirming table recreation
+    """
+    try:
+        logger.warning(
+            "ADMIN ACTION: Deleting and recreating table to clear all data")
+
+        # Call the CRUD function to clear table
+        result = clear_all_articles()
+
+        if result["success"]:
+            action = result["data"]["action"]
+            logger.warning(f"Table operation completed: {action}")
+
+            return SuccessResponse(
+                message=result["message"]
+            )
+        else:
+            logger.error(
+                f"Clear table failed: {result.get('error', 'Unknown error')}")
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("error", "Failed to clear table")
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in clear_all_articles_endpoint: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 # ================================
 # HEALTH CHECK

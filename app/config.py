@@ -49,12 +49,27 @@ class Settings(BaseSettings):
     dynamodb_table_name: str
 
     # ================================
-    # AI SUMMARIZATION SETTINGS
+    # AWS BEDROCK SETTINGS
     # ================================
-    summarizer_model: str = "sshleifer/distilbart-cnn-12-6"
+    bedrock_access_key: str
+    bedrock_secret_access_key: str
+    # Titan Text G1 - Lite is available in us-east-1
+    bedrock_region: str = "us-east-1"
+
+    # Bedrock Foundation Models
+    bedrock_summarization_model: str = "amazon.titan-text-lite-v1"
+    bedrock_embedding_model: str = "amazon.titan-embed-text-v2:0"
+    bedrock_chat_model: str = "meta.llama3-1-8b-instruct-v1:0"
+
+    # Model Configuration
+    bedrock_max_tokens: int = 4096
+    bedrock_temperature: float = 0.7
+    bedrock_top_p: float = 0.9
+
+    # ================================
+    # AI SUMMARIZATION SETTINGS (Legacy - moved to Bedrock config)
+    # ================================
     summarizer_concurrency: int = 3
-    summarizer_max_length: int = 250
-    summarizer_min_length: int = 150
     summarizer_content_min_chars: int = 500
     summarizer_max_chars: int = 7000
 
@@ -82,15 +97,15 @@ class Settings(BaseSettings):
     # ================================
     ollama_host: str = "http://localhost:11434"
 
-    #======================
+    # ======================
     # Web Searcher Settings
-    #======================
+    # ======================
     tavily_api_key: str
     # ======================
 
-    #======================
+    # ======================
     # OpenAI Settings
-    #======================
+    # ======================
     openai_key: str
     # ======================
 
@@ -136,13 +151,21 @@ class Settings(BaseSettings):
             "batch_size": self.news_batch_size
         }
 
-    def get_summarizer_config(self) -> dict:
-        """Get AI summarizer configuration dictionary"""
+    def get_bedrock_config(self) -> dict:
+        """Get AWS Bedrock configuration dictionary"""
         return {
-            "model_name": self.summarizer_model,
+            "aws_access_key_id": self.bedrock_access_key,
+            "aws_secret_access_key": self.bedrock_secret_access_key,
+            "region_name": self.bedrock_region,
+            "summarization_model": self.bedrock_summarization_model,
+            "embedding_model": self.bedrock_embedding_model,
+            "chat_model": self.bedrock_chat_model,
+            "max_tokens": self.bedrock_max_tokens,
+            "temperature": self.bedrock_temperature,
+            "top_p": self.bedrock_top_p,
+            "batch_size": 5,
+            # Processing settings (moved from old summarizer config)
             "concurrency": self.summarizer_concurrency,
-            "max_length": self.summarizer_max_length,
-            "min_length": self.summarizer_min_length,
             "content_min_chars": self.summarizer_content_min_chars,
             "max_chars": self.summarizer_max_chars
         }
@@ -159,6 +182,8 @@ def validate_settings():
         "aws_access_key_id",
         "aws_secret_access_key",
         "dynamodb_table_name",
+        "bedrock_access_key",
+        "bedrock_secret_access_key",
         "tavily_api_key",
         "openai_key"
     ]

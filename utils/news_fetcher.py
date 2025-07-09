@@ -122,7 +122,7 @@ async def enhance_article_with_full_content(article: Dict[str, Any]) -> Dict[str
 
 @app.get("/fetch")
 async def fetch_news_basic():
-    """Fetch top 500 news articles from the last 5 days
+    """Fetch top 10 news articles from the last 5 days (for testing)
     Sample article/response format:
     {
     "total": 1,
@@ -156,7 +156,7 @@ async def fetch_news_basic():
         "apiKey": NEWS_API_KEY,
         "q": "news",  # General query to get broad news coverage
         "language": "en",
-        "pageSize": 100,  # Maximum allowed by NewsAPI
+        "pageSize": 10,  # Changed from 100 to 10 for testing
         "page": page,
         "from": from_date,
         "sortBy": "publishedAt"  # Sort by popularity to get top news
@@ -170,7 +170,7 @@ async def fetch_news_basic():
     filename = f"news_articles_{timestamp}.json"
 
     async with httpx.AsyncClient() as client:
-        while len(articles_store) < 500:
+        while len(articles_store) < 10:  # Changed from 500 to 10 for testing
 
             # Set the updated page number
             params["page"] = page
@@ -184,8 +184,8 @@ async def fetch_news_basic():
                 articles = data.get("articles", [])
                 articles_store.extend(articles)
 
-                # Check if we've reached the end of available articles and max storage capacity of storing 500 articles
-                if len(articles) < 100 or len(articles_store) >= 500:
+                # Check if we've reached the end of available articles and max storage capacity of storing 10 articles
+                if len(articles) < 10 or len(articles_store) >= 10:  # Changed from 100/500 to 10
                     break
 
                 # Move to next page
@@ -195,8 +195,8 @@ async def fetch_news_basic():
                 raise HTTPException(status_code=e.response.status_code if hasattr(e, 'response') else 500,
                                     detail=str(e))
 
-    # Trim to max 500 articles
-    return {"total": len(articles_store[:500]), "articles": articles_store[:500]}
+    # Trim to max 10 articles for testing
+    return {"total": len(articles_store[:10]), "articles": articles_store[:10]}
 
 
 @app.get("/fetch-news-enhanced")

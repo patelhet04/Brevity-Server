@@ -1,289 +1,215 @@
-import asyncio
-from langchain_huggingface import HuggingFacePipeline
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
-from tqdm.asyncio import tqdm_asyncio
+import logging
 from .news_fetcher import fetch_news_enhanced, test_extraction
+from app.config import settings
+import asyncio
 import json
-import torch
-import gc
 import os
+from typing import Dict, Any, List
+import boto3
+from botocore.exceptions import ClientError
+import sys
+from pathlib import Path
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-os.environ["TORCH_USE_CUDA_DSA"] = "1"
+# Add the project root to the path so we can import from app
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
 
-
-def clear_gpu_memory():
-    """Clear GPU memory cache"""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gc.collect()
-
-
-def get_llm(model_name: str):
-    # Initialize the model
-    model_name = model_name
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-
-    # Create summarization pipeline
-    summarizer = pipeline(
-        "summarization",
-        model=model,
-        tokenizer=tokenizer,
-        max_length=250,  # Adjust based on desired summary length
-        min_length=150,
-        do_sample=False,  # For deterministic summaries
-        early_stopping=False,     # Don't stop at first EOS
-        num_beams=4,             # Better quality generation
-    )
-
-    # Wrap with LangChain
-    return HuggingFacePipeline(pipeline=summarizer)
+logger = logging.getLogger(__name__)
 
 
-async def summarize_article(article, summarizer, semaphore):
-    """Summarize a single article with semaphore for concurrency control"""
+class BedrockSummarizer:
+    """Amazon Bedrock Titan Text G1 - Lite summarizer with batch processing"""
 
-    async with semaphore:
+    def __init__(self):
+        """Initialize the Bedrock summarizer"""
+        self.bedrock_config = settings.get_bedrock_config()
+        self.client = self._setup_bedrock_client()
+        self.model_id = self.bedrock_config["summarization_model"]
+        self.max_tokens = self.bedrock_config["max_tokens"]
+        self.temperature = self.bedrock_config["temperature"]
+        self.top_p = self.bedrock_config["top_p"]
+        self.max_input_chars = 6000
+        self.batch_size = 5  # Process 5 articles at a time
+        self.delay_between_batches = 1.0  # 1 second delay between batches
+
+    def _setup_bedrock_client(self):
+        """Setup the Bedrock client with credentials"""
         try:
-            # Extract content from your article JSON
-            content = article.get("full_content", "")
-            title = article.get("title", "")
-
-            # Check if content is long enough to summarize
-            if len(content) < 500:
-                return {**article, "summary": "Content too short to summarize"}
-
-            # Create prompt with title context if available
-            input_text = f"{title}. {content}" if title else content
-
-            max_chars = 7000  # Approximate character limit
-            if len(input_text) > max_chars:
-                input_text = input_text[:max_chars]
-
-            # Generate summary
-            summary = summarizer.invoke(input_text)
-
-            # Add summary to article dictionary
-            return {**article, "summary": summary}
-
+            return boto3.client(
+                'bedrock-runtime',
+                aws_access_key_id=self.bedrock_config["aws_access_key_id"],
+                aws_secret_access_key=self.bedrock_config["aws_secret_access_key"],
+                region_name=self.bedrock_config["region_name"]
+            )
         except Exception as e:
-            print(f"Error summarizing article: {e}")
-            return {**article, "summary": f"Error: {str(e)}"}
+            logger.error(f"Error setting up Bedrock client: {e}")
+            raise
 
-
-def semantic_chunking(text, tokenizer, max_tokens=512):
-    """Split text based on paragraphs and sections
-    This is used for map-reduce strategy"""
-    # Split by paragraphs first
-    paragraphs = text.split('\n\n')
-    chunks = []
-    current_chunk = ""
-
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        test_chunk = current_chunk + "\n\n" + paragraph if current_chunk else paragraph
-        tokens = tokenizer.encode(test_chunk, add_special_tokens=True)
-
-        if len(tokens) <= max_tokens:
-            current_chunk = test_chunk
-        else:
-            # Save current chunk and start new one
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            current_chunk = paragraph
-
-    # Add final chunk
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-
-    validated_chunks = []
-    for chunk in chunks:
-        chunk_tokens = tokenizer.encode(chunk, add_special_tokens=True)
-        if len(chunk_tokens) <= max_tokens:
-            validated_chunks.append(chunk)
-        else:
-            print(
-                f"Warning: Chunk still too long ({len(chunk_tokens)} tokens), truncating...")
-
-    return chunks
-
-
-def efficient_semantic_chunking(text, tokenizer, max_tokens=512):
-    """Efficient semantic chunking with guaranteed size limits"""
-
-    safe_max_tokens = max_tokens - 5
-    chunks = []
-
-    # Split by paragraphs
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-
-    current_chunk = ""
-
-    for paragraph in paragraphs:
-        test_chunk = current_chunk + "\n\n" + paragraph if current_chunk else paragraph
-
-        if len(tokenizer.encode(test_chunk, add_special_tokens=True)) <= safe_max_tokens:
-            current_chunk = test_chunk
-        else:
-            # Save current chunk
-            if current_chunk:
-                chunks.append(current_chunk)
-
-            # Handle oversized paragraph
-            if len(tokenizer.encode(paragraph, add_special_tokens=True)) > safe_max_tokens:
-                # Split paragraph into sentences and build chunks
-                sentences = paragraph.replace('. ', '.|').split('|')
-                para_chunk = ""
-
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if not sentence:
-                        continue
-
-                    test_sentence = para_chunk + " " + sentence if para_chunk else sentence
-
-                    if len(tokenizer.encode(test_sentence, add_special_tokens=True)) <= safe_max_tokens:
-                        para_chunk = test_sentence
-                    else:
-                        if para_chunk:
-                            chunks.append(para_chunk)
-
-                        para_chunk = sentence
-
-                current_chunk = para_chunk if para_chunk else ""
-            else:
-                current_chunk = paragraph
-
-    # Add final chunk
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # Final safety check with truncation
-    final_chunks = []
-    for chunk in chunks:
-        chunk_tokens = tokenizer.encode(chunk, add_special_tokens=True)
-        if len(chunk_tokens) > safe_max_tokens:
-            print(
-                f"Warning: Chunk still too long ({len(chunk_tokens)} tokens)")
-
-        final_chunks.append(chunk)
-
-    return final_chunks
-
-
-async def map_reduce_summarization(article, summarizer, semaphore, max_tokens=1024):
-    """Use map-reduce pattern for long texts using semantic_chunking technique"""
-    async with semaphore:
+    def invoke(self, input_text: str) -> str:
+        """Invoke the Bedrock model for summarization"""
         try:
-            tokenizer = summarizer.pipeline.tokenizer
-            if 'intermediate_summary' in article:
-                full_article = article.get('intermediate_summary')
+            prompt = f"Please provide a concise summary of the following article:\n\n{input_text}\n\nSummary:"
+
+            body = {
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": min(self.max_tokens, 512),
+                    "temperature": self.temperature,
+                    "topP": self.top_p
+                }
+            }
+
+            response = self.client.invoke_model(
+                modelId=self.model_id,
+                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json"
+            )
+
+            response_body = json.loads(response['body'].read())
+
+            if 'results' in response_body and len(response_body['results']) > 0:
+                result = response_body['results'][0]
+                if 'outputText' in result:
+                    summary = result['outputText'].strip()
+                    if summary.startswith("Summary:"):
+                        summary = summary[8:].strip()
+                    return summary
+                else:
+                    logger.error(f"No outputText in result: {result}")
+                    return "Error: No outputText in response"
             else:
-                full_article = article.get('full_content', "")
+                logger.error(
+                    f"No results in Bedrock response. Response: {response_body}")
+                return "Error: No summary generated"
 
-            if len(tokenizer.encode(full_article, add_special_tokens=True)) <= max_tokens:
-                print("here")
-                final_summary = summarizer.invoke(full_article)
-                clear_gpu_memory()
-                return {**article, "summary": final_summary}
-
-            # Step 1: Map - split into chunks and summarize each
-            chunks = efficient_semantic_chunking(full_article, tokenizer)
-            chunk_summaries = []
-
-            for chunk in chunks:
-                summary = summarizer.invoke(chunk)
-                chunk_summaries.append(summary)
-
-            # Step 2: Reduce - combine summaries
-            combined_summary = " ".join(chunk_summaries)
-
-            # If combined summary is still too long, summarize again
-            combined_tokens = tokenizer.encode(
-                combined_summary, add_special_tokens=True)
-            if len(combined_tokens) > max_tokens:
-                article['intermediate_summary'] = combined_summary
-                clear_gpu_memory()
-                print("here2")
-                return await map_reduce_summarization(article, summarizer, semaphore)
-
-            return {**article, "summary": combined_summary}
-
+        except ClientError as e:
+            logger.error(f"Bedrock API error: {e}")
+            return f"Error: {str(e)}"
         except Exception as e:
-            print(f"Error summarizing article: {e}")
-            return {**article, "summary": f"Error: {str(e)}"}
+            logger.error(f"Error invoking Bedrock model: {e}")
+            return f"Error: {str(e)}"
 
-# Process articles in batches with controlled concurrency
+    async def process_batch(self, articles_batch: List[Dict]) -> List[Dict]:
+        """Process a batch of articles"""
+        results = []
+
+        for article in articles_batch:
+            try:
+                bedrock_config = settings.get_bedrock_config()
+                content_min_chars = bedrock_config.get(
+                    "content_min_chars", 500)
+                max_chars = bedrock_config.get("max_chars", 7000)
+
+                content = article.get("full_content", "")
+                title = article.get("title", "")
+
+                if len(content) < content_min_chars:
+                    results.append(
+                        {**article, "summary": "Content too short to summarize"})
+                    continue
+
+                input_text = f"{title}. {content}" if title else content
+
+                if len(input_text) > max_chars:
+                    input_text = input_text[:max_chars]
+
+                # Add small delay between individual requests in batch
+                if len(results) > 0:
+                    await asyncio.sleep(0.2)  # 200ms delay between requests
+
+                summary = self.invoke(input_text)
+                results.append({**article, "summary": summary})
+
+            except Exception as e:
+                logger.error(f"Error summarizing article: {e}")
+                results.append({**article, "summary": f"Error: {str(e)}"})
+
+        return results
 
 
-async def process_articles(articles, concurrency=2):
-    """Process articles with controlled concurrency"""
-    # Create semaphore to limit concurrent processing
-    semaphore = asyncio.Semaphore(concurrency)
-
-    """Setup the summarizer model. Model options are "sshleifer/distilbart-cnn-12-6" and "google/bigbird-pegasus-large-arxiv". Distil-Bart has token limit of 1024 so we have to use chunking and map-reduce strategy to make it work.
-    Whereas BigBird_Pegasus has token limit of 4096 and thus can be used using normal summarizer pipeline without chunking and so forth.
-    BigBird gave terrible results as its trained for scientific data summarization.
-    """
-    summarizer = get_llm("sshleifer/distilbart-cnn-12-6")
-
-    results = []
-
-    async def summarize_and_update(article):
-        result = await map_reduce_summarization(article, summarizer, semaphore)
-        return result
-
-    # Create tasks with the wrapper
-    tasks = [summarize_and_update(article) for article in articles]
-
-    # Process tasks
-    results = await asyncio.gather(*tasks)
-
-    return results
+def get_llm(model_name: str = None):
+    """Get the Bedrock summarizer"""
+    return BedrockSummarizer()
 
 
-async def summarize_single_article_async(concurrency=2):
-    """Async main function to summarize fetched articles"""
-    # Properly await the fetch_news coroutine
+async def process_articles_in_batches(articles: List[Dict], batch_size: int = 5) -> List[Dict]:
+    """Process articles in batches to avoid rate limits"""
+    summarizer = get_llm()
+    all_results = []
 
+    # Split articles into batches
+    for i in range(0, len(articles), batch_size):
+        batch = articles[i:i + batch_size]
+        batch_num = (i // batch_size) + 1
+        total_batches = (len(articles) + batch_size - 1) // batch_size
+
+        logger.info(
+            f"Processing batch {batch_num}/{total_batches} ({len(batch)} articles)")
+
+        # Process the batch
+        batch_results = await summarizer.process_batch(batch)
+        all_results.extend(batch_results)
+
+        # Add delay between batches (except for the last batch)
+        if i + batch_size < len(articles):
+            logger.info(
+                f"Waiting {summarizer.delay_between_batches}s before next batch...")
+            await asyncio.sleep(summarizer.delay_between_batches)
+
+    return all_results
+
+
+async def process_articles(articles, concurrency=None):
+    """Process articles with batch processing instead of high concurrency"""
+    # Get batch size from config
+    bedrock_config = settings.get_bedrock_config()
+    batch_size = bedrock_config.get("batch_size", 5)
+
+    logger.info(
+        f"Processing {len(articles)} articles in batches of {batch_size}")
+
+    return await process_articles_in_batches(articles, batch_size)
+
+
+async def summarize_single_article_async():
+    """Async function to summarize a single article"""
     single_article = await test_extraction("https://www.foxsports.com/stories/mlb/yordan-alvarezs-return-delayed-newly-discovered-hand-fracture")
-    articles = list()
-    articles.append(single_article)
-    # Process the article
-    return await process_articles(articles, concurrency)
+    articles = [single_article]
+    return await process_articles(articles)
 
 
 def single_article_test():
-    """Entry point that runs the async functions for sumamrizing a single fetched article"""
-    return asyncio.run(summarize_single_article_async(concurrency=5))
+    """Test with a single article"""
+    return asyncio.run(summarize_single_article_async())
 
 
-async def summarize_articles_async(concurrency=5):
-    """Async main function to summarize fetched articles"""
-    # Properly await the fetch_news coroutine
-    articles = await fetch_news_enhanced()
+async def summarize_articles_async():
+    """Async function to summarize fetched articles"""
+    articles_data = await fetch_news_enhanced()
+    articles = articles_data.get("articles", [])
 
-    # Process the articles
-    return await process_articles(articles.get("articles", ""), concurrency)
+    if not articles:
+        logger.warning("No articles to process")
+        return []
+
+    return await process_articles(articles)
 
 
 def main():
-    """Entry point that runs the async functions"""
-    return asyncio.run(summarize_articles_async(concurrency=5))
+    """Main entry point"""
+    return asyncio.run(summarize_articles_async())
 
 
 # # Execution point
 # if __name__ == "__main__":
-#     clear_gpu_memory()
 #     summarized_articles = main()
 
-#     # summarized_articles = single_article_test()
-
-#     # Save results to file instead of printing
+#     # Save results to file
 #     try:
-#         with open("summarized_articles_single.json", "w", encoding="utf-8") as f:
+#         with open("summarized_articles_batch.json", "w", encoding="utf-8") as f:
 #             json.dump(summarized_articles, f, ensure_ascii=False, indent=2)
-#         print(f"Results saved to summarized_articles.json")
+#         print(f"Results saved to summarized_articles_batch.json")
+#         print(f"Processed {len(summarized_articles)} articles")
 #     except Exception as e:
 #         print(f"Error saving results: {e}")

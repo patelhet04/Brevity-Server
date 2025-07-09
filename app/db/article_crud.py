@@ -322,6 +322,51 @@ def batch_get_articles(urls: List[str]) -> Dict[str, Any]:
 # ================================
 
 
+def clear_all_articles() -> Dict[str, Any]:
+    """Clear all articles by deleting and recreating the table"""
+    try:
+        from app.db.database import dynamodb, TABLE_NAME, create_table_if_not_exists
+
+        logger.warning(f"DELETING table {TABLE_NAME} to clear all data...")
+
+        # Delete the table
+        table.delete()
+        logger.info(f"Table {TABLE_NAME} deletion initiated")
+
+        # Wait for table to be deleted
+        logger.info("Waiting for table deletion to complete...")
+        table.wait_until_not_exists()
+        logger.info(f"Table {TABLE_NAME} successfully deleted")
+
+        # Recreate the table with same schema
+        logger.info(f"Recreating table {TABLE_NAME}...")
+        new_table = create_table_if_not_exists()
+
+        logger.info(f"✅ Table {TABLE_NAME} cleared and recreated successfully")
+        return {
+            "success": True,
+            "data": {"action": "table_recreated"},
+            "message": f"Table {TABLE_NAME} cleared by recreation"
+        }
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        error_message = e.response['Error']['Message']
+        logger.error(f"Clear table failed: {error_code} - {error_message}")
+
+        return {
+            "success": False,
+            "error": error_message,
+            "error_code": error_code
+        }
+    except Exception as e:
+        logger.error(f"Clear table failed: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }
+
+
 def article_exists(url: str) -> Dict[str, Any]:
     """Check if article exists (lightweight operation)"""
     try:
@@ -365,5 +410,6 @@ __all__ = [
     'scan_recent_articles',
     'batch_put_articles',
     'batch_get_articles',
+    'clear_all_articles',
     'article_exists'
 ]

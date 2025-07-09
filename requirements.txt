@@ -5,7 +5,7 @@ dotenv
 uvicorn
 langchain_community
 tqdm
-transformers==4.35.2
+transformers
 langchain_huggingface
 aiofiles
 newspaper3k
@@ -15,14 +15,16 @@ python-dotenv
 pydantic
 pydantic-settings
 chromadb
-sentence-transformers==2.6.0
-huggingface-hub==0.20.0
+sentence-transformers
+huggingface-hub
 torch
 ollama
 redis
 llama-index-core
 llama-index-vector-stores-chroma
 llama-index-embeddings-huggingface
+llama-index-embeddings-bedrock
+llama-index-llms-bedrock
 tavily-python
 llama-index-tools-tavily-research
 llama-index-llms-ollama
